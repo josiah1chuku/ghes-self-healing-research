@@ -1,7 +1,6 @@
 """
 agent/remediate.py
-LLM-powered remediation agent for GHES VM self-healing.
-Receives anomaly report, calls Claude API, executes approved action.
+LLM-powered remediation agent using Google Gemini API (free tier).
 """
 
 import argparse
@@ -49,29 +48,29 @@ SKU_LADDER = {
 }
 
 
-def call_claude(system_prompt, user_prompt):
+def call_gemini(system_prompt, user_prompt):
+    """Call Google Gemini API - free tier, no credit card needed."""
     import urllib.request
-    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    api_key = os.environ.get("GEMINI_API_KEY")
     if not api_key:
-        raise EnvironmentError("ANTHROPIC_API_KEY not set")
+        raise EnvironmentError("GEMINI_API_KEY not set")
+
+    full_prompt = f"{system_prompt}\n\n{user_prompt}"
     payload = json.dumps({
-        "model": "claude-sonnet-4-6",
-        "max_tokens": 1024,
-        "system": system_prompt,
-        "messages": [{"role": "user", "content": user_prompt}]
+        "contents": [{"parts": [{"text": full_prompt}]}],
+        "generationConfig": {"temperature": 0.1, "maxOutputTokens": 1024}
     }).encode("utf-8")
+
+    url = (f"https://generativelanguage.googleapis.com/v1beta/"
+           f"models/gemini-1.5-flash:generateContent?key={api_key}")
+
     req = urllib.request.Request(
-        "https://api.anthropic.com/v1/messages",
-        data=payload,
-        headers={
-            "Content-Type": "application/json",
-            "x-api-key": api_key,
-            "anthropic-version": "2023-06-01"
-        }
+        url, data=payload,
+        headers={"Content-Type": "application/json"}
     )
     with urllib.request.urlopen(req, timeout=30) as resp:
         data = json.loads(resp.read().decode("utf-8"))
-    return data["content"][0]["text"]
+    return data["candidates"][0]["content"]["parts"][0]["text"]
 
 
 def build_system_prompt():
@@ -177,8 +176,8 @@ def action_rollback(env, dry_run=False):
         return {"success": False, "action": "rollback",
                 "reason": "No previous deployment found"}
     if dry_run:
-        return {"success": True, "dry_run": True, "action": "rollback",
-                "target": last_good}
+        return {"success": True, "dry_run": True,
+                "action": "rollback", "target": last_good}
     return {"success": True, "action": "rollback",
             "target_deployment": last_good,
             "output": "Rollback initiated"}
@@ -196,25 +195,29 @@ def action_alert_only(report):
 def run_agent(env, report, dry_run=False):
     timestamp = datetime.now(timezone.utc).isoformat()
     print(f"\n{'='*55}")
-    print(f"  GHES LLM Remediation Agent")
+    print(f"  GHES LLM Remediation Agent (Gemini)")
     print(f"  Env      : {env}")
     print(f"  Anomaly  : {report.get('anomaly_type','unknown')}")
     print(f"  Severity : {report.get('severity','unknown')}")
     print(f"  Dry run  : {dry_run}")
     print(f"{'='*55}\n")
 
-    print("Step 1: Calling Claude API...")
+    print("Step 1: Calling Gemini API...")
     llm_raw = None
     llm_decision = None
     try:
-        llm_raw      = call_claude(build_system_prompt(), build_user_prompt(report))
-        clean        = llm_raw.strip().lstrip("```json").lstrip("```").rstrip("```").strip()
-        llm_decision = json.loads(clean)
+        llm_raw = call_gemini(build_system_prompt(), build_user_prompt(report))
+        clean = llm_raw.strip()
+        if "```" in clean:
+            clean = clean.split("```")[1]
+            if clean.startswith("json"):
+                clean = clean[4:]
+        llm_decision = json.loads(clean.strip())
         print(f"  Action    : {llm_decision.get('selected_action')}")
         print(f"  Confidence: {llm_decision.get('confidence')}")
         print(f"  Reason    : {llm_decision.get('justification')}")
     except Exception as e:
-        print(f"  Claude error: {e} — falling back to alert_only")
+        print(f"  Gemini error: {e} — falling back to alert_only")
         llm_decision = {
             "selected_action": "alert_only",
             "confidence": "low",
@@ -229,7 +232,7 @@ def run_agent(env, report, dry_run=False):
         print(f"  Invalid action '{selected}' — forcing alert_only")
         selected = "alert_only"
 
-    print(f"\nStep 2: Executing: {selected}")
+    print(f"\nStep 2: Executing action: {selected}")
     start = time.time()
     if selected == "redeploy":
         result = action_redeploy(env, dry_run)
@@ -244,6 +247,8 @@ def run_agent(env, report, dry_run=False):
     audit = {
         "timestamp": timestamp,
         "env": env,
+        "llm_provider": "google_gemini",
+        "llm_model": "gemini-1.5-flash",
         "anomaly_report": report,
         "llm_decision": llm_decision,
         "selected_action": selected,
@@ -269,25 +274,13 @@ def run_agent(env, report, dry_run=False):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--env", default="test",
-                        choices=["dev","test","prod"])
+    parser.add_argument("--env", default="test", choices=["dev","test","prod"])
     parser.add_argument("--report")
-    parser.add_argument("--live", action="store_true")
-    parser.add_argument("--workspace-id")
     parser.add_argument("--dry-run", action="store_true")
-    parser.add_argument("--force-action",
-                        choices=list(ACTION_CATALOG.keys()))
+    parser.add_argument("--force-action", choices=list(ACTION_CATALOG.keys()))
     args = parser.parse_args()
 
-    if args.live:
-        sys.path.insert(0, str(ROOT_DIR))
-        from ml.predict import predict
-        report = predict(env=args.env, workspace_id=args.workspace_id,
-                         use_file=args.workspace_id is None)
-        if not report.get("is_anomaly"):
-            print(f"No anomaly on {args.env}. Nothing to remediate.")
-            sys.exit(0)
-    elif args.report:
+    if args.report:
         with open(args.report) as f:
             report = json.load(f)
     else:
@@ -298,15 +291,9 @@ def main():
             "is_anomaly": True,
             "anomaly_type": "resource_exhaustion",
             "severity": "high",
-            "models": {
-                "isolation_forest": {"label":1,"score":-0.45,"is_anomaly":True},
-                "lstm_autoencoder": {"label":1,"reconstruction_error":0.082,
-                                     "threshold":0.031,"is_anomaly":True}
-            },
             "current_metrics": {
-                "cpu_pct":91.2,"memory_available_mb":412.0,
-                "disk_free_pct":23.4,"disk_queue":8.1,
-                "net_rx":1240000.0,"net_tx":890000.0
+                "cpu_pct": 91.2, "memory_available_mb": 412.0,
+                "disk_free_pct": 23.4, "disk_queue": 8.1,
             },
             "n_anomalies_last_hour": 14
         }
