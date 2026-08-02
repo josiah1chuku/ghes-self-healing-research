@@ -1,0 +1,204 @@
+name: GHES Self-Healing Pipeline
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Target environment"
+        required: true
+        type: choice
+        options: [dev, test, prod]
+  push:
+    branches: [main]
+    paths: ['iac/**']
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  REGION: eastus
+  TEMPLATE: ./iac/main.bicep
+
+jobs:
+
+  validate:
+    name: "1 · Validate IaC"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Bicep
+        run: |
+          curl -Lo bicep https://github.com/Azure/bicep/releases/latest/download/bicep-linux-x64
+          chmod +x bicep && sudo mv bicep /usr/local/bin/
+
+      - name: Bicep Build
+        run: bicep build ${{ env.TEMPLATE }}
+
+      - name: Bicep Lint
+        run: bicep lint ${{ env.TEMPLATE }}
+
+      - name: Upload Compiled ARM
+        uses: actions/upload-artifact@v4
+        with:
+          name: compiled-arm-${{ github.run_number }}
+          path: ./iac/main.json
+          retention-days: 90
+
+  deploy:
+    name: "2 · Deploy Infrastructure"
+    runs-on: ubuntu-latest
+    needs: validate
+    if: github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main'
+    environment:
+      name: ${{ inputs.environment || 'dev' }}
+    outputs:
+      workspace_id: ${{ steps.deploy.outputs.logAnalyticsWorkspaceId }}
+      vm_name:      ${{ steps.deploy.outputs.vmResourceId }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          client-id:       ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id:       ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Set Params Path
+        id: params
+        run: |
+          ENV="${{ inputs.environment || 'dev' }}"
+          echo "path=./iac/environments/${ENV}.parameters.json" >> $GITHUB_OUTPUT
+          echo "env=${ENV}" >> $GITHUB_OUTPUT
+
+      - name: What-If Preview
+        run: |
+          az deployment sub what-if \
+            --location ${{ env.REGION }} \
+            --template-file ${{ env.TEMPLATE }} \
+            --parameters @${{ steps.params.outputs.path }} \
+            --no-pretty-print
+
+      - name: Deploy Bicep
+        id: deploy
+        run: |
+          RESULT=$(az deployment sub create \
+            --location ${{ env.REGION }} \
+            --template-file ${{ env.TEMPLATE }} \
+            --parameters @${{ steps.params.outputs.path }} \
+            --name "ghes-${{ github.run_number }}" \
+            --output json)
+          echo "$RESULT" | tee deployment-output.json
+          WS_ID=$(echo "$RESULT" | jq -r '.properties.outputs.logAnalyticsWorkspaceId.value // empty')
+          VM_ID=$(echo "$RESULT" | jq -r '.properties.outputs.vmResourceId.value // empty')
+          echo "logAnalyticsWorkspaceId=${WS_ID}" >> $GITHUB_OUTPUT
+          echo "vmResourceId=${VM_ID}"            >> $GITHUB_OUTPUT
+
+      - name: Upload Deployment Output
+        uses: actions/upload-artifact@v4
+        with:
+          name: deployment-output-${{ github.run_number }}
+          path: deployment-output.json
+          retention-days: 90
+
+      - name: Rollback on Failure
+        if: failure()
+        run: |
+          az deployment sub delete \
+            --name "ghes-${{ github.run_number }}" \
+            --no-wait || true
+
+  detect:
+    name: "3 · ML Anomaly Detection"
+    runs-on: ubuntu-latest
+    needs: deploy
+    outputs:
+      is_anomaly:    ${{ steps.detect.outputs.is_anomaly }}
+      anomaly_type:  ${{ steps.detect.outputs.anomaly_type }}
+      severity:      ${{ steps.detect.outputs.severity }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install ML dependencies
+        run: pip install -r ml/requirements.txt
+
+      - name: Run Anomaly Detection
+        id: detect
+        env:
+          WORKSPACE_ID: ${{ needs.deploy.outputs.workspace_id }}
+        run: |
+          python ml/predict.py \
+            --env ${{ inputs.environment || 'dev' }} \
+            --workspace-id "$WORKSPACE_ID" \
+            --output json > /tmp/report.json 2>&1 || true
+
+          IS_ANOMALY=$(jq -r '.is_anomaly // false' /tmp/report.json)
+          ATYPE=$(jq -r '.anomaly_type // "none"'   /tmp/report.json)
+          SEV=$(jq -r '.severity // "none"'          /tmp/report.json)
+
+          echo "is_anomaly=${IS_ANOMALY}"   >> $GITHUB_OUTPUT
+          echo "anomaly_type=${ATYPE}"      >> $GITHUB_OUTPUT
+          echo "severity=${SEV}"            >> $GITHUB_OUTPUT
+
+          echo "Anomaly: ${IS_ANOMALY} | Type: ${ATYPE} | Severity: ${SEV}"
+          cp /tmp/report.json anomaly-report.json
+
+      - name: Upload Anomaly Report
+        uses: actions/upload-artifact@v4
+        with:
+          name: anomaly-report-${{ github.run_number }}
+          path: anomaly-report.json
+
+  remediate:
+    name: "4 · LLM Remediation"
+    runs-on: ubuntu-latest
+    needs: detect
+    if: needs.detect.outputs.is_anomaly == 'true'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install -r ml/requirements.txt
+
+      - name: Download Anomaly Report
+        uses: actions/download-artifact@v4
+        with:
+          name: anomaly-report-${{ github.run_number }}
+
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          client-id:       ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id:       ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Run LLM Remediation Agent
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          python agent/remediate.py \
+            --env ${{ inputs.environment || 'dev' }} \
+            --report anomaly-report.json
+
+      - name: Upload Remediation Log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: remediation-log-${{ github.run_number }}
+          path: agent/logs/
+          retention-days: 90
