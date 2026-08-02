@@ -1,0 +1,15 @@
+{
+  "pretrained_on": "AzureVMNoiseDataset2024",
+  "dataset_url": "https://github.com/Azure/AzurePublicDataset",
+  "license": "CC-BY-4.0",
+  "n_train_samples": 2436,
+  "feature_cols": [
+    "cpu_perf",
+    "cpu_mean_10",
+    "cpu_std_10",
+    "cpu_min_10",
+    "cpu_delta",
+    "cpu_pct_change"
+  ],
+  "trained_at": "2026-08-02T17:55:44.888023"
+}
