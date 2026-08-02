@@ -1,0 +1,37 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "environmentName":           { "value": "prod" },
+    "resourceGroupName":         { "value": "ghes-research-prod-rg" },
+    "location":                  { "value": "eastus" },
+    "vmName":                    { "value": "ghes-research-prod-vm" },
+    "vmSize":                    { "value": "Standard_D16s_v3" },
+    "osDiskSizeGB":              { "value": 200 },
+    "dataDiskSizeGB":            { "value": 1024 },
+    "imagePublisher":            { "value": "github" },
+    "imageOffer":                { "value": "github-enterprise" },
+    "imageSku":                  { "value": "github-enterprise" },
+    "imageVersion":              { "value": "3.12.0" },
+    "nicName":                   { "value": "ghes-research-prod-nic" },
+    "subnetId":                  { "value": "/subscriptions/YOUR_SUB_ID/resourceGroups/ghes-research-network-rg/providers/Microsoft.Network/virtualNetworks/ghes-research-vnet/subnets/prod-subnet" },
+    "privateIpAddress":          { "value": "10.1.3.10" },
+    "privateIpAllocationMethod": { "value": "Static" },
+    "enablePublicIp":            { "value": false },
+    "enableCmkEncryption":       { "value": true },
+    "diskEncryptionSetId":       { "value": "/subscriptions/YOUR_SUB_ID/resourceGroups/ghes-research-security-rg/providers/Microsoft.Compute/diskEncryptionSets/ghes-research-prod-des" },
+    "bootDiagnosticsStorageUri": { "value": "https://ghesresearchprod.blob.core.windows.net/" },
+    "adminUsername":             { "value": "ghesadmin" },
+    "adminPassword":             { "value": "REPLACE_WITH_STRONG_PASSWORD" },
+    "keyVaultName":              { "value": "ghes-research-kv" },
+    "enableMonitoring":          { "value": true },
+    "logRetentionDays":          { "value": 180 },
+    "tags": { "value": {
+      "Environment":      "prod",
+      "Project":          "GHES-Self-Healing-Research",
+      "Paper":            "ICPADS-2026",
+      "Owner":            "josiah1chuku",
+      "BackupEnabled":    "true"
+    }}
+  }
+}

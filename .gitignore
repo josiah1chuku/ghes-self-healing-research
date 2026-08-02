@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+.venv/
+ml/data/*.csv
+ml/models/*.pkl
+ml/models/*.h5
+.env
+secrets/
+*.local.json
+.azure/

@@ -1,0 +1,36 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "environmentName":           { "value": "dev" },
+    "resourceGroupName":         { "value": "ghes-research-dev-rg" },
+    "location":                  { "value": "eastus" },
+    "vmName":                    { "value": "ghes-research-dev-vm" },
+    "vmSize":                    { "value": "Standard_D4s_v3" },
+    "osDiskSizeGB":              { "value": 128 },
+    "dataDiskSizeGB":            { "value": 256 },
+    "imagePublisher":            { "value": "github" },
+    "imageOffer":                { "value": "github-enterprise" },
+    "imageSku":                  { "value": "github-enterprise" },
+    "imageVersion":              { "value": "latest" },
+    "nicName":                   { "value": "ghes-research-dev-nic" },
+    "subnetId":                  { "value": "/subscriptions/YOUR_SUB_ID/resourceGroups/ghes-research-network-rg/providers/Microsoft.Network/virtualNetworks/ghes-research-vnet/subnets/dev-subnet" },
+    "privateIpAddress":          { "value": "10.1.1.10" },
+    "privateIpAllocationMethod": { "value": "Static" },
+    "enablePublicIp":            { "value": true },
+    "enableCmkEncryption":       { "value": false },
+    "diskEncryptionSetId":       { "value": "" },
+    "bootDiagnosticsStorageUri": { "value": "" },
+    "adminUsername":             { "value": "ghesadmin" },
+    "adminPassword":             { "value": "REPLACE_WITH_STRONG_PASSWORD" },
+    "keyVaultName":              { "value": "" },
+    "enableMonitoring":          { "value": true },
+    "logRetentionDays":          { "value": 30 },
+    "tags": { "value": {
+      "Environment": "dev",
+      "Project":     "GHES-Self-Healing-Research",
+      "Paper":       "ICPADS-2026",
+      "Owner":       "josiah1chuku"
+    }}
+  }
+}
