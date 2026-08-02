@@ -1,0 +1,62 @@
+{
+  "dataset": "AzureVMNoiseDataset2024",
+  "n_observations": 10406,
+  "trained_at": "2026-08-02T19:08:22.343114",
+  "results": [
+    {
+      "model": "One-Class SVM",
+      "precision": 0.049,
+      "recall": 1.0,
+      "f1": 0.0933,
+      "auc": 0.9904,
+      "train_time_seconds": 0.03,
+      "justification": "Kernel-based unsupervised baseline. Learns a decision boundary around normal data without anomaly labels. RBF kernel captures non-linear relationships between CPU performance metrics.",
+      "limitations": "Scales poorly to large datasets O(n^2). Requires careful tuning of nu and gamma. Assumes a single compact cluster of normal data which may not hold for heterogeneous VM workloads."
+    },
+    {
+      "model": "Random Forest",
+      "precision": 1.0,
+      "recall": 0.7143,
+      "f1": 0.8333,
+      "auc": 1.0,
+      "train_time_seconds": 0.71,
+      "feature_importances": {
+        "cpu_perf": 0.3446,
+        "cpu_mean_10": 0.051,
+        "cpu_std_10": 0.0192,
+        "cpu_min_10": 0.2268,
+        "cpu_delta": 0.1369,
+        "cpu_pct_change": 0.2214
+      },
+      "justification": "Supervised baseline using 3-sigma anomaly labels. Interpretable \u2014 feature importances reveal which metrics most strongly predict anomalies. Handles class imbalance via class_weight=balanced.",
+      "limitations": "Requires labeled training data. Treats each observation independently ignoring temporal dependencies \u2014 significant limitation for time-series infrastructure metrics where gradual degradation unfolds over minutes to hours."
+    },
+    {
+      "model": "Isolation Forest",
+      "precision": 0.0504,
+      "recall": 1.0,
+      "f1": 0.0959,
+      "auc": 0.9887,
+      "train_time_seconds": 0.66,
+      "justification": "Primary unsupervised model. Linear time complexity O(n log n), low memory footprint, strong performance on high-dimensional tabular data. Robust to extreme class imbalance (0.2% anomaly rate) in production infrastructure.",
+      "limitations": "Assumes anomalies are globally rare and isolated. May not capture clustered anomaly patterns such as cascading failures. Operates on fixed feature windows without modeling temporal dependencies."
+    }
+  ],
+  "model_rationale": {
+    "OneClassSVM": {
+      "justification": "Kernel-based unsupervised baseline. Learns a decision boundary around normal data without anomaly labels. RBF kernel captures non-linear relationships between CPU performance metrics.",
+      "limitations": "Scales poorly to large datasets O(n^2). Requires careful tuning of nu and gamma. Assumes a single compact cluster of normal data which may not hold for heterogeneous VM workloads.",
+      "why_chosen": "Kernel-based boundary learning \u2014 no distributional assumption required"
+    },
+    "RandomForest": {
+      "justification": "Supervised baseline using 3-sigma anomaly labels. Interpretable \u2014 feature importances reveal which metrics most strongly predict anomalies. Handles class imbalance via class_weight=balanced.",
+      "limitations": "Requires labeled training data. Treats each observation independently ignoring temporal dependencies \u2014 significant limitation for time-series infrastructure metrics where gradual degradation unfolds over minutes to hours.",
+      "why_chosen": "Supervised baseline \u2014 interpretable feature importances for paper analysis"
+    },
+    "IsolationForest": {
+      "justification": "Primary unsupervised model. Linear time complexity O(n log n), low memory footprint, strong performance on high-dimensional tabular data. Robust to extreme class imbalance (0.2% anomaly rate) in production infrastructure.",
+      "limitations": "Assumes anomalies are globally rare and isolated. May not capture clustered anomaly patterns such as cascading failures. Operates on fixed feature windows without modeling temporal dependencies.",
+      "why_chosen": "Primary model \u2014 O(n log n) complexity, robust to extreme class imbalance"
+    }
+  }
+}
