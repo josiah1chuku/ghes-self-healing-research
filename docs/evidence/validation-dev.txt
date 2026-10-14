@@ -1,0 +1,14 @@
+PASS  C1 no public IP on NIC ()
+PASS  C2 static private IP (Static)
+PASS  C4 system-assigned identity (SystemAssigned)
+PASS  C5 boot diagnostics (true)
+PASS  C6 encryption at host (true)
+PASS  C6 OS disk CMK (EncryptionAtRestWithCustomerKey)
+PASS  C6 data disk CMK (EncryptionAtRestWithCustomerKey)
+PASS  C7 password auth disabled (true)
+PASS  C7 classification tag (dev)
+
+== Negative tests: these deployments MUST be rejected ==
+PASS  N1 enablePublicIp=true rejected by @allowed
+PASS  N2 enableCmkEncryption=false rejected by @allowed
+FAIL  N3 policy did not block out-of-band public IP

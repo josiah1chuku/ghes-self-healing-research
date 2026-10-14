@@ -16,7 +16,7 @@ param vmName string
 @description('VM SKU')
 param vmSize string
 
-@minValue(128)
+@minValue(200) // GHES marketplace image ships a 200 GB root disk
 param osDiskSizeGB int
 
 @minValue(256)
@@ -31,21 +31,26 @@ param nicName string
 param subnetId string
 param privateIpAddress string
 
-@allowed(['Static', 'Dynamic'])
+@description('Compliance control: static private IP only.')
+@allowed(['Static'])
 param privateIpAllocationMethod string = 'Static'
 
+@description('Compliance control: no public IP. Any other value fails template validation.')
+@allowed([false])
 param enablePublicIp bool = false
-param enableCmkEncryption bool = false
-param diskEncryptionSetId string = ''
-param bootDiagnosticsStorageUri string = ''
 
-@secure()
+@description('Compliance control: customer-managed key encryption. Any other value fails template validation.')
+@allowed([true])
+param enableCmkEncryption bool = true
+
+@description('Resource ID of the disk encryption set created by foundation/main.bicep.')
+param diskEncryptionSetId string
+
 param adminUsername string
 
-@secure()
-param adminPassword string
+@description('SSH public key (ed25519 or RSA). Password authentication is disabled.')
+param adminSshPublicKey string
 
-param keyVaultName string = ''
 param enableMonitoring bool = true
 
 @minValue(30)
@@ -88,7 +93,6 @@ module network './modules/network.bicep' = {
 module vm './modules/vm.bicep' = {
   name: 'vm-${environmentName}'
   scope: rg
-  dependsOn: [network, monitoring]
   params: {
     vmName: vmName
     vmSize: vmSize
@@ -101,11 +105,9 @@ module vm './modules/vm.bicep' = {
     imageVersion: imageVersion
     nicId: network.outputs.nicId
     adminUsername: adminUsername
-    adminPassword: adminPassword
-    enableCmkEncryption: enableCmkEncryption
+    adminSshPublicKey: adminSshPublicKey
     diskEncryptionSetId: diskEncryptionSetId
-    bootDiagnosticsStorageUri: bootDiagnosticsStorageUri
-    logAnalyticsWorkspaceId: enableMonitoring ? monitoring.outputs.workspaceId : ''
+    logAnalyticsWorkspaceResourceId: enableMonitoring ? monitoring.outputs.workspaceResourceId : ''
     tags: tags
   }
 }
@@ -114,6 +116,7 @@ output privateIp string = network.outputs.privateIp
 output publicIp string = network.outputs.publicIp
 output vmResourceId string = vm.outputs.vmResourceId
 output nicResourceId string = network.outputs.nicId
+output cmkEnabled bool = enableCmkEncryption
 output principalId string = vm.outputs.principalId
 output logAnalyticsWorkspaceId string = enableMonitoring ? monitoring.outputs.workspaceId : ''
 output logAnalyticsResourceId string = enableMonitoring ? monitoring.outputs.workspaceResourceId : ''

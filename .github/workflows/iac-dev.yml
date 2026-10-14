@@ -1,0 +1,93 @@
+name: IaC - dev deploy and verify
+
+# Manual only: deploying starts a billed VM. Pull requests run build and lint, nothing else.
+on:
+  workflow_dispatch:
+    inputs:
+      teardown:
+        description: Delete the dev resource group when finished
+        type: boolean
+        default: true
+  pull_request:
+    paths: ['iac/**', 'foundation/**', 'policy/**', 'scripts/**']
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  REGION: eastus
+  ENV_NAME: dev
+  RG: ghes-research-dev-rg
+
+jobs:
+  validate:
+    name: Build and lint templates
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Bicep build and lint
+        run: |
+          for f in iac/main.bicep foundation/main.bicep policy/policy.bicep policy/probe-public-ip.bicep; do
+            echo "== $f"
+            az bicep build --file "$f" --stdout > /dev/null
+            az bicep lint --file "$f"
+          done
+      - name: Script syntax
+        run: bash -n scripts/validate-claims.sh && bash -n scripts/00-prereqs.sh
+
+  deploy-dev:
+    name: Deploy dev and verify controls
+    if: github.event_name == 'workflow_dispatch'
+    needs: validate
+    runs-on: ubuntu-latest
+    environment: dev          # add required reviewers on this environment to gate the spend
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id:       ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id:       ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Render parameters
+        env:
+          SUB: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          KEY: ${{ secrets.DEV_SSH_PUBLIC_KEY }}
+        run: |
+          sed -e "s|<SUB_ID>|$SUB|g" -e "s|<PASTE_SSH_PUBLIC_KEY>|$KEY|g" \
+            iac/environments/dev.parameters.json > "$RUNNER_TEMP/dev.parameters.json"
+          if grep -q "<" "$RUNNER_TEMP/dev.parameters.json"; then echo "Unresolved placeholder"; exit 1; fi
+          echo "PARAM_FILE=$RUNNER_TEMP/dev.parameters.json" >> "$GITHUB_ENV"
+
+      - name: What-if
+        run: az deployment sub what-if -l "$REGION" -f iac/main.bicep -p @"$PARAM_FILE"
+
+      - name: Deploy infrastructure
+        run: |
+          az deployment sub create -l "$REGION" -n "ghes-dev-${{ github.run_number }}" \
+            -f iac/main.bicep -p @"$PARAM_FILE" -o none
+
+      - name: Assign Azure Policy (deny public IPs)
+        run: az deployment group create -g "$RG" -f policy/policy.bicep -o none
+
+      - name: Verify the paper's claims
+        env:
+          N3_ATTEMPTS: "25"     # Azure Policy can take ~30 minutes to start enforcing
+        run: |
+          chmod +x scripts/validate-claims.sh
+          scripts/validate-claims.sh dev 2>&1 | tee validation-dev.txt
+
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: validation-dev-${{ github.run_number }}
+          path: validation-dev.txt
+          retention-days: 90
+
+      - name: Tear down dev
+        if: always() && inputs.teardown
+        run: az group delete -n "$RG" --yes --no-wait

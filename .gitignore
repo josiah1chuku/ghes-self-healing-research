@@ -8,3 +8,4 @@ ml/models/*.h5
 secrets/
 *.local.json
 .azure/
+iac/main.json

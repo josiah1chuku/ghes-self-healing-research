@@ -10,16 +10,15 @@ param imageOffer string
 param imageSku string
 param imageVersion string
 param nicId string
-@secure()
 param adminUsername string
-@secure()
-param adminPassword string
-param enableCmkEncryption bool = false
-param diskEncryptionSetId string = ''
-param bootDiagnosticsStorageUri string = ''
-param logAnalyticsWorkspaceId string = ''
+param adminSshPublicKey string
+param diskEncryptionSetId string
+param logAnalyticsWorkspaceResourceId string = ''
+@description('The GHES appliance is not a general-purpose Linux host. Leave false unless you have tested the agent on it.')
+param enableAmaExtension bool = false
 param tags object
 
+// CMK-encrypted data disk, no public/network access.
 resource dataDisk 'Microsoft.Compute/disks@2023-04-02' = {
   name: '${vmName}-data-disk'
   location: location
@@ -28,14 +27,12 @@ resource dataDisk 'Microsoft.Compute/disks@2023-04-02' = {
   properties: {
     diskSizeGB: dataDiskSizeGB
     creationData: { createOption: 'Empty' }
-    encryption: enableCmkEncryption ? {
+    encryption: {
       type: 'EncryptionAtRestWithCustomerKey'
       diskEncryptionSetId: diskEncryptionSetId
-    } : {
-      type: 'EncryptionAtRestWithPlatformKey'
     }
-    networkAccessPolicy: 'AllowAll'
-    publicNetworkAccess: 'Enabled'
+    networkAccessPolicy: 'DenyAll'
+    publicNetworkAccess: 'Disabled'
   }
 }
 
@@ -60,7 +57,7 @@ resource vm 'Microsoft.Compute/virtualMachines@2023-09-01' = {
         caching: 'ReadWrite'
         managedDisk: {
           storageAccountType: 'Premium_LRS'
-          diskEncryptionSet: enableCmkEncryption ? { id: diskEncryptionSetId } : null
+          diskEncryptionSet: { id: diskEncryptionSetId }
         }
         deleteOption: 'Delete'
       }
@@ -71,24 +68,22 @@ resource vm 'Microsoft.Compute/virtualMachines@2023-09-01' = {
           createOption: 'Attach'
           caching: 'None'
           deleteOption: 'Detach'
-          managedDisk: {
-            id: dataDisk.id
-            storageAccountType: 'Premium_LRS'
-            diskEncryptionSet: enableCmkEncryption ? { id: diskEncryptionSetId } : null
-          }
+          managedDisk: { id: dataDisk.id }
         }
       ]
     }
     osProfile: {
       computerName: vmName
       adminUsername: adminUsername
-      adminPassword: adminPassword
       linuxConfiguration: {
-        disablePasswordAuthentication: false
-        patchSettings: {
-          patchMode: 'AutomaticByPlatform'
-          assessmentMode: 'AutomaticByPlatform'
-          automaticByPlatformSettings: { rebootSetting: 'IfRequired' }
+        disablePasswordAuthentication: true
+        ssh: {
+          publicKeys: [
+            {
+              path: '/home/${adminUsername}/.ssh/authorized_keys'
+              keyData: adminSshPublicKey
+            }
+          ]
         }
       }
     }
@@ -100,22 +95,18 @@ resource vm 'Microsoft.Compute/virtualMachines@2023-09-01' = {
         }
       ]
     }
+    // Managed boot diagnostics: no storage account, no public blob endpoint.
     diagnosticsProfile: {
-      bootDiagnostics: {
-        enabled: true
-        storageUri: empty(bootDiagnosticsStorageUri) ? null : bootDiagnosticsStorageUri
-      }
+      bootDiagnostics: { enabled: true }
     }
     securityProfile: {
-      securityType: 'TrustedLaunch'
-      uefiSettings: { secureBootEnabled: true, vTpmEnabled: true }
       encryptionAtHost: true
     }
     priority: 'Regular'
   }
 }
 
-resource amaExtension 'Microsoft.Compute/virtualMachines/extensions@2023-09-01' = if (!empty(logAnalyticsWorkspaceId)) {
+resource amaExtension 'Microsoft.Compute/virtualMachines/extensions@2023-09-01' = if (enableAmaExtension) {
   name: 'AzureMonitorLinuxAgent'
   parent: vm
   location: location
@@ -126,6 +117,16 @@ resource amaExtension 'Microsoft.Compute/virtualMachines/extensions@2023-09-01' 
     typeHandlerVersion: '1.29'
     autoUpgradeMinorVersion: true
     enableAutomaticUpgrade: true
+  }
+}
+
+// Platform metrics (CPU %, etc.) to Log Analytics; works without any guest agent.
+resource metricsDiag 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = if (!empty(logAnalyticsWorkspaceResourceId)) {
+  name: 'vm-platform-metrics'
+  scope: vm
+  properties: {
+    workspaceId: logAnalyticsWorkspaceResourceId
+    metrics: [{ category: 'AllMetrics', enabled: true }]
   }
 }
 
